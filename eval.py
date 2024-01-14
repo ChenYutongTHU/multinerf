@@ -62,8 +62,14 @@ def main(unused_argv):
   metric_harness = image.MetricHarness()
 
   last_step = 0
-  out_dir = path.join(config.checkpoint_dir,
-                      'path_renders' if config.render_path else 'test_preds')
+  if config.render_path:
+    out_name = 'path_renders' 
+  else:
+    if config.render_split == 'train':
+      out_name = 'train_preds'
+    elif config.render_split == 'test':
+      out_name = f'{config.test_split_name}_preds'
+  out_dir = path.join(config.checkpoint_dir, out_name)
   path_fn = lambda x: path.join(out_dir, x)
 
   if not config.eval_only_once:

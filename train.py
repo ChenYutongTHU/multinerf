@@ -48,6 +48,15 @@ def main(unused_argv):
   np.random.seed(20201473 + jax.host_id())
 
   config = configs.load_config()
+  if config.reduce_batch_render_size_by !=1:
+    print('Reduce batch render size by', config.reduce_batch_render_size_by)
+    assert config.batch_size % config.reduce_batch_render_size_by == 0
+    config.batch_size = int(config.batch_size/config.reduce_batch_render_size_by)
+    config.render_chunk_size = int(config.render_chunk_size/config.reduce_batch_render_size_by)
+    config.max_steps *= config.reduce_batch_render_size_by
+    config.lr_init /= config.reduce_batch_render_size_by
+    config.lr_final /=  config.reduce_batch_render_size_by
+    config.lr_delay_steps *= config.reduce_batch_render_size_by
 
   if config.batch_size % jax.device_count() != 0:
     raise ValueError('Batch size must be divisible by the number of devices.')
@@ -223,7 +232,7 @@ def main(unused_argv):
             config.checkpoint_dir, state_to_save, int(step), keep=100)
 
     # Test-set evaluation.
-    if config.train_render_every > 0 and step % config.train_render_every == 0:
+    if config.train_render_every > 0 and (step % config.train_render_every == 0 or step==init_step):
       # We reuse the same random number generator from the optimization step
       # here on purpose so that the visualization matches what happened in
       # training.

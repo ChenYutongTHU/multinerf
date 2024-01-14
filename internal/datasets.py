@@ -38,6 +38,7 @@ import sys
 sys.path.insert(0,'internal/pycolmap')
 sys.path.insert(0,'internal/pycolmap/pycolmap')
 import pycolmap
+from tqdm import tqdm
 
 
 def load_dataset(split, train_dir, config):
@@ -104,7 +105,6 @@ class NeRFSceneManager(pycolmap.SceneManager):
     # Image names from COLMAP. No need for permuting the poses according to
     # image names anymore.
     names = [imdata[k].name for k in imdata]
-
     # Switch from COLMAP (right, down, fwd) to NeRF (right, up, back) frame.
     poses = poses @ np.diag([1, -1, -1, 1])
 
@@ -151,6 +151,7 @@ class NeRFSceneManager(pycolmap.SceneManager):
 
 def load_blender_posedata(data_dir, split=None):
   """Load poses from `transforms.json` file, as used in Blender/NGP datasets."""
+
   suffix = '' if split is None else f'_{split}'
   pose_file = path.join(data_dir, f'transforms{suffix}.json')
   with utils.open_file(pose_file, 'r') as fp:
@@ -250,6 +251,7 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
     super().__init__()
 
     # Initialize attributes
+    self.config = config
     self._queue = queue.Queue(3)  # Set prefetch buffer to 3 batches.
     self.daemon = True  # Sets parent Thread to be a daemon.
     self._patch_size = np.maximum(config.patch_size, 1)
@@ -269,8 +271,8 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
 
     self.split = utils.DataSplit(split)
     self.data_dir = data_dir
-    self.near = config.near
-    self.far = config.far
+    self.near = config.near #may be modified in self._load_renderings
+    self.far = config.far #may be modified in self._load_renderings (camera-specific)
     self.render_path = config.render_path
     self.distortion_params = None
     self.disp_images = None
@@ -293,7 +295,6 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
 
     # Load data from disk using provided config parameters.
     self._load_renderings(config)
-
     if self.render_path:
       if config.render_path_file is not None:
         with utils.open_file(config.render_path_file, 'rb') as fp:
@@ -315,7 +316,7 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
 
     self._n_examples = self.camtoworlds.shape[0]
 
-    self.cameras = (self.pixtocams,
+    self.cameras = (self.pixtocams, #(n,3,3) OR (3,3)
                     self.camtoworlds,
                     self.distortion_params,
                     self.pixtocam_ndc)
@@ -408,10 +409,14 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
     """
 
     broadcast_scalar = lambda x: np.broadcast_to(x, pix_x_int.shape)[..., None]
+    if type(self.near)!=np.ndarray:
+      near_, far_ = self.near, self.far
+    else:
+      near_, far_ = self.near[cam_idx], self.far[cam_idx]
     ray_kwargs = {
         'lossmult': broadcast_scalar(1.) if lossmult is None else lossmult,
-        'near': broadcast_scalar(self.near),
-        'far': broadcast_scalar(self.far),
+        'near': broadcast_scalar(near_),
+        'far': broadcast_scalar(far_),
         'cam_idx': broadcast_scalar(cam_idx),
     }
     # Collect per-camera information needed for each ray.
@@ -439,8 +444,17 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
     # Create data batch.
     batch = {}
     batch['rays'] = rays
-    if not self.render_path:
-      batch['rgb'] = self.images[cam_idx, pix_y_int, pix_x_int]
+    if not self.render_path: #TODO self.images=None? 
+      if self.config.blender_dataloader_type == 'list':
+        batch['rgb'] = self.images[cam_idx, pix_y_int, pix_x_int]
+      else:
+        assert self._batching != utils.BatchingMethod.ALL_IMAGES
+        images = []
+        ci  = cam_idx if type(cam_idx) == int else cam_idx[0]
+        image = self.read_image(self.config, self.fprefixes[ci])
+        image = self.rgba_to_rgb(image) #H,W,3
+        images = image[pix_y_int, pix_x_int]
+        batch['rgb'] = images
     if self._load_disps:
       batch['disps'] = self.disp_images[cam_idx, pix_y_int, pix_x_int]
     if self._load_normals:
@@ -507,58 +521,111 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
 class Blender(Dataset):
   """Blender Dataset."""
 
+  def read_image(self, config, fprefix):
+      def get_img_(f):
+        image = utils.load_img(fprefix + f)
+        if config.factor > 1:
+          image = lib_image.downsample(image, config.factor)
+        return image 
+      if self._use_tiffs:
+        channels = [get_img_(f'_{ch}.tiff') for ch in ['R', 'G', 'B', 'A']]
+        # Convert image to sRGB color space.
+        image = lib_image.linear_to_srgb(np.stack(channels, axis=-1))
+      else:
+        f = '.png' if not '.png' in fprefix else ''
+        image = get_img_(f) / 255.
+      return image
+
+  def rgba_to_rgb(self, images):
+      rgb, alpha = images[..., :3], images[..., -1:]
+      images= rgb * alpha + (1. - alpha)  # Use a white background.
+      return images 
+  
   def _load_renderings(self, config):
     """Load images from disk."""
     if config.render_path:
       raise ValueError('render_path cannot be used for the blender dataset.')
-    pose_file = path.join(self.data_dir, f'transforms_{self.split.value}.json')
+    if self.split.value == 'train':
+      pose_file_name = config.blender_train_json 
+    elif self.split.value == 'test':
+      pose_file_name = config.blender_test_json 
+    pose_file = path.join(self.data_dir, pose_file_name)
     with utils.open_file(pose_file, 'r') as fp:
       meta = json.load(fp)
     images = []
+    fprefixes = []
     disp_images = []
     normal_images = []
     cams = []
-    for _, frame in enumerate(meta['frames']):
-      fprefix = os.path.join(self.data_dir, frame['file_path'])
+    image_names = []
+    nears, fars = [], []
 
+    pixtocams, focals = [], []
+    for ffi, frame in tqdm(enumerate(meta['frames'])):
+      fprefix = os.path.join(self.data_dir, frame['file_path'])
+      fprefixes.append(fprefix)
+      image_names.append(frame.get('image_name', frame['file_path'].replace('/', '-')).replace('.png',''))
       def get_img(f, fprefix=fprefix):
         image = utils.load_img(fprefix + f)
         if config.factor > 1:
           image = lib_image.downsample(image, config.factor)
         return image
+      
+      if config.blender_dataloader_type == 'list' or ffi == 0:
+        image = self.read_image(config, fprefix)
+        self.height, self.width = image.shape[:2]
+        if self._load_disps:
+          disp_image = get_img('_disp.tiff')
+          disp_images.append(disp_image)
+        if self._load_normals:
+          normal_image = get_img('_normal.png')[..., :3] * 2. / 255. - 1.
+          normal_images.append(normal_image)
 
-      if self._use_tiffs:
-        channels = [get_img(f'_{ch}.tiff') for ch in ['R', 'G', 'B', 'A']]
-        # Convert image to sRGB color space.
-        image = lib_image.linear_to_srgb(np.stack(channels, axis=-1))
+      if config.blender_dataloader_type == 'list' :
+        images.append(image)
       else:
-        image = get_img('.png') / 255.
-      images.append(image)
+        assert self._load_disps == False and self._load_normals == False
 
-      if self._load_disps:
-        disp_image = get_img('_disp.tiff')
-        disp_images.append(disp_image)
-      if self._load_normals:
-        normal_image = get_img('_normal.png')[..., :3] * 2. / 255. - 1.
-        normal_images.append(normal_image)
 
       cams.append(np.array(frame['transform_matrix'], dtype=np.float32))
 
-    self.images = np.stack(images, axis=0)
-    if self._load_disps:
-      self.disp_images = np.stack(disp_images, axis=0)
-    if self._load_normals:
-      self.normal_images = np.stack(normal_images, axis=0)
-      self.alphas = self.images[..., -1]
+      if 'camera_angle_x' in frame:
+        focal = .5 * self.width / np.tan(.5 * float(frame['camera_angle_x']))
+      else:
+        focal = .5 * self.width / np.tan(.5 * float(meta['camera_angle_x']))
+      focals.append(focal)
+      pixtocams.append(camera_utils.get_pixtocam(focal, self.width,
+                                                  self.height))
+      
+      if 'near' in frame:
+        nears.append(frame['near'])
+        fars.append(frame['far'])
 
-    rgb, alpha = self.images[..., :3], self.images[..., -1:]
-    self.images = rgb * alpha + (1. - alpha)  # Use a white background.
-    self.height, self.width = self.images.shape[1:3]
+    if config.blender_dataloader_type == 'list':
+      images = np.stack(images, axis=0)
+      if self._load_disps:
+        self.disp_images = np.stack(disp_images, axis=0)
+      if self._load_normals:
+        self.normal_images = np.stack(normal_images, axis=0)
+        self.alphas = images[..., -1]
+      self.images = self.rgba_to_rgb(images)
+    else:
+      self.images = None
     self.camtoworlds = np.stack(cams, axis=0)
-    self.focal = .5 * self.width / np.tan(.5 * float(meta['camera_angle_x']))
-    self.pixtocams = camera_utils.get_pixtocam(self.focal, self.width,
-                                               self.height)
 
+    ''' Modified by Yutong, we allow different images to have different pixtocams
+    self.focal = .5 * self.width / np.tan(.5 * float(meta['camera_angle_x']))
+    # self.pixtocams = camera_utils.get_pixtocam(self.focal, self.width,
+    #                                            self.height)
+    '''
+    self.pixtocams = np.stack(pixtocams, axis=0)
+    self.focal = np.stack(focals, axis=0)
+    self.fprefixes = fprefixes
+    self.image_names = image_names
+    if nears != []:
+      self.near = np.array(nears)
+      self.far = np.array(fars)
+      print('Camera-specific near and far planes loaded, overwrite Config.near/far')
 
 class LLFF(Dataset):
   """LLFF Dataset."""
@@ -694,15 +761,26 @@ class LLFF(Dataset):
 
     # Select the split.
     all_indices = np.arange(images.shape[0])
-    if config.llff_use_all_images_for_training or raw_testscene:
-      train_indices = all_indices
+    if config.split_file:
+        split2name = json.load(open(config.split_file, 'r'))
+        test_indices = np.array([i for i,n in zip(all_indices,image_names) if n[:-4] in split2name[config.test_split_name]])
+        train_indices = np.array([(n[:-4] in split2name['train']) for i,n in zip(all_indices,image_names) ])
+        split_indices = {
+            utils.DataSplit.TEST: test_indices,
+            utils.DataSplit.TRAIN: train_indices,
+        }
     else:
-      train_indices = all_indices % config.llffhold != 0
-    split_indices = {
-        utils.DataSplit.TEST: all_indices[all_indices % config.llffhold == 0],
-        utils.DataSplit.TRAIN: train_indices,
-    }
+        if config.llff_use_all_images_for_training or raw_testscene:
+            train_indices = all_indices
+        else:
+            train_indices = all_indices % config.llffhold != 0
+        split_indices = {
+            utils.DataSplit.TEST: all_indices[all_indices % config.llffhold == 0],
+            utils.DataSplit.TRAIN: train_indices, #mask True or False
+        }
     indices = split_indices[self.split]
+    print(self.split, len(indices))
+    print(indices)
     # All per-image quantities must be re-indexed using the split indices.
     images = images[indices]
     poses = poses[indices]
@@ -715,6 +793,7 @@ class LLFF(Dataset):
     self.images = images
     self.camtoworlds = self.render_poses if config.render_path else poses
     self.height, self.width = images.shape[1:3]
+
 
 
 class TanksAndTemplesNerfPP(Dataset):

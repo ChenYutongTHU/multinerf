@@ -80,3 +80,5 @@ Config.lr_delay_mult = 0.01
 Config.grad_max_norm = 0.1
 Config.grad_max_val = 0.1
 Config.adam_eps = 1e-8
+
+Config.reduce_batch_size_by = 1

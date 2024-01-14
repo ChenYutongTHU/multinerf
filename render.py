@@ -99,8 +99,7 @@ def main(unused_argv):
 
   config = configs.load_config(save_config=False)
 
-  dataset = datasets.load_dataset('test', config.data_dir, config)
-
+  dataset = datasets.load_dataset(f'{config.render_split}', config.data_dir, config)
   key = random.PRNGKey(20200823)
   _, state, render_eval_pfn, _, _ = train_utils.setup_model(config, key)
 
@@ -109,11 +108,21 @@ def main(unused_argv):
   else:
     postprocess_fn = lambda z: z
 
-  state = checkpoints.restore_checkpoint(config.checkpoint_dir, state)
+  if config.load_checkpoint_step==None:
+    state = checkpoints.restore_checkpoint(config.checkpoint_dir, state)
+  else:
+    state = checkpoints.restore_checkpoint(config.checkpoint_dir, state, step=config.load_checkpoint_step)
   step = int(state.step)
   print(f'Rendering checkpoint at step {step}.')
 
-  out_name = 'path_renders' if config.render_path else 'test_preds'
+  if config.render_path:
+    out_name = 'path_renders' 
+  else:
+    if config.render_split == 'train':
+      out_name = 'train_preds'
+    elif config.render_split == 'test':
+      out_name = f'{config.test_split_name}_preds'
+      
   out_name = f'{out_name}_step_{step}'
   base_dir = config.render_dir
   if base_dir is None:
@@ -142,6 +151,10 @@ def main(unused_argv):
       continue
     # If current image and next image both already exist, skip ahead.
     idx_str = idx_to_str(idx)
+    if config.save_as_idx==True:
+      idx_str = idx_to_str(idx)
+    else:
+      idx_str = dataset.image_names[idx]
     curr_file = path_fn(f'color_{idx_str}.png')
     next_idx_str = idx_to_str(idx + config.render_num_jobs)
     next_file = path_fn(f'color_{next_idx_str}.png')
@@ -156,7 +169,6 @@ def main(unused_argv):
         functools.partial(render_eval_pfn, state.params, train_frac),
         rays, None, config)
     print(f'Rendered in {(time.time() - eval_start_time):0.3f}s')
-
     if jax.host_id() != 0:  # Only record via host 0.
       continue
 

@@ -67,8 +67,10 @@ class Config:
   near: float = 2.  # Near plane distance.
   far: float = 6.  # Far plane distance.
   checkpoint_dir: Optional[str] = None  # Where to log checkpoints.
+  load_checkpoint_step: Optional[int] = None  # Load a specific checkpoint step.
   render_dir: Optional[str] = None  # Output rendering directory.
   data_dir: Optional[str] = None  # Input data directory.
+  split_file: Optional[str] = None
   vocab_tree_path: Optional[str] = None  # Path to vocab tree for COLMAP.
   render_chunk_size: int = 16384  # Chunk size for whole-image renderings.
   num_showcase_images: int = 5  # The number of test-set images to showcase.
@@ -78,6 +80,7 @@ class Config:
   vis_decimate: int = 0
 
   # Only used by train.py:
+  reduce_batch_render_size_by: float = 1.
   max_steps: int = 250000  # The number of optimization steps.
   early_exit_steps: Optional[int] = None  # Early stopping, for debugging.
   checkpoint_every: int = 25000  # The number of steps to save a checkpoint.
@@ -133,6 +136,8 @@ class Config:
   eval_crop_borders: int = 0  # Ignore c border pixels in eval (x[c:-c, c:-c]).
 
   # Only used by render.py
+  test_split_name: str = 'test' # test-near or test-far or test_zoom-in_lens
+  render_split: str = 'test'  # The split to render.
   render_video_fps: int = 60  # Framerate in frames-per-second.
   render_video_crf: int = 18  # Constant rate factor for ffmpeg video quality.
   render_path_frames: int = 120  # Number of frames in render path.
@@ -170,7 +175,14 @@ class Config:
   autoexpose_renders: bool = False  # During rendering, autoexpose each image.
   # For raw test scenes, use affine raw-space color correction.
   eval_raw_affine_cc: bool = False
+  
+  # Used only in blender
+  blender_train_json: str='transforms_train.json'
+  blender_test_json: str='transforms_test.json'
+  blender_dataloader_type: str='list'
 
+
+  save_as_idx: bool = True  # Save images as idx instead of png.
 
 def define_common_flags():
   # Define the flags used by both train.py and eval.py
