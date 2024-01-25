@@ -112,7 +112,7 @@ class Config:
   #       'NerfMLP_0': 0.00001,
   #       'PropMLP_0/Dense_0': 0.001,
   #   }
-  # Any model parameter that isn't specified gets a mult of 0. See the
+  # Any model parameter that isn't orspecified gets a mult of 0. See the
   # train_weight_l2_* parameters in TensorBoard to know what can be regularized.
 
   lr_init: float = 0.002  # The initial learning rate.
@@ -138,6 +138,8 @@ class Config:
   # Only used by render.py
   test_split_name: str = 'test' # test-near or test-far or test_zoom-in_lens
   render_split: str = 'test'  # The split to render.
+  eval_split: str = 'test' # The split to test.
+  eval_interval: int = 1  # The interval between images to be evaled
   render_video_fps: int = 60  # Framerate in frames-per-second.
   render_video_crf: int = 18  # Constant rate factor for ffmpeg video quality.
   render_path_frames: int = 120  # Number of frames in render path.
@@ -179,8 +181,14 @@ class Config:
   # Used only in blender
   blender_train_json: str='transforms_train.json'
   blender_test_json: str='transforms_test.json'
+  blender_val_json: str='transforms_val.json'
   blender_dataloader_type: str='list'
 
+  blender_bg_color_test: str='white'
+  blender_bg_color_train: str='white'
+
+  train_val_every: int = -1
+  val_frame_num: int=10
 
   save_as_idx: bool = True  # Save images as idx instead of png.
 

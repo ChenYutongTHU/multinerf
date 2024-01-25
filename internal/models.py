@@ -238,20 +238,23 @@ class Model(nn.Module):
       )[0]
 
       # Define or sample the background color for each ray.
-      if self.bg_intensity_range[0] == self.bg_intensity_range[1]:
-        # If the min and max of the range are equal, just take it.
-        bg_rgbs = self.bg_intensity_range[0]
-      elif rng is None:
-        # If rendering is deterministic, use the midpoint of the range.
-        bg_rgbs = (self.bg_intensity_range[0] + self.bg_intensity_range[1]) / 2
+      if rays.bg_color is not None: #bg Yutong
+        bg_rgbs = rays.bg_color
       else:
-        # Sample RGB values from the range for each ray.
-        key, rng = random_split(rng)
-        bg_rgbs = random.uniform(
-            key,
-            shape=weights.shape[:-1] + (3,),
-            minval=self.bg_intensity_range[0],
-            maxval=self.bg_intensity_range[1])
+        if self.bg_intensity_range[0] == self.bg_intensity_range[1]:
+          # If the min and max of the range are equal, just take it.
+          bg_rgbs = self.bg_intensity_range[0]
+        elif rng is None:
+          # If rendering is deterministic, use the midpoint of the range.
+          bg_rgbs = (self.bg_intensity_range[0] + self.bg_intensity_range[1]) / 2
+        else:
+          # Sample RGB values from the range for each ray.
+          key, rng = random_split(rng)
+          bg_rgbs = random.uniform(
+              key,
+              shape=weights.shape[:-1] + (3,),
+              minval=self.bg_intensity_range[0],
+              maxval=self.bg_intensity_range[1])
 
       # RawNeRF exposure logic.
       if rays.exposure_idx is not None:

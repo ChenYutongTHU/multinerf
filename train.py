@@ -15,6 +15,7 @@
 """Training script."""
 
 import functools
+import os
 import gc
 import time
 
@@ -63,6 +64,8 @@ def main(unused_argv):
 
   dataset = datasets.load_dataset('train', config.data_dir, config)
   test_dataset = datasets.load_dataset('test', config.data_dir, config)
+  if config.train_val_every > 0:
+    val_dataset = datasets.load_dataset('val', config.data_dir, config)
 
   np_to_jax = lambda x: jnp.array(x) if isinstance(x, np.ndarray) else x
   cameras = tuple(np_to_jax(x) for x in dataset.cameras)
@@ -232,6 +235,32 @@ def main(unused_argv):
             config.checkpoint_dir, state_to_save, int(step), keep=100)
 
     # Test-set evaluation.
+    if config.train_val_every >0 and (step % config.train_val_every == 0 or step==init_step):
+      metric_total = {}
+      output_dir = os.path.join(config.checkpoint_dir, 'val',f'step_{step}')
+      eval_variables = flax.jax_utils.unreplicate(state).params
+      os.makedirs(output_dir, exist_ok=True)
+      for ii, name in enumerate(val_dataset.image_names):
+        val_case = next(val_dataset)
+        rendering = models.render_image(
+            functools.partial(render_eval_pfn, eval_variables, train_frac),
+            val_case.rays, rngs[0], config)
+        #output image
+        output_name = os.path.join(output_dir, f'color_{name}.png')
+        utils.save_img_u8(postprocess_fn(rendering['rgb']), output_name)       
+        metric = metric_harness(postprocess_fn(rendering['rgb']), postprocess_fn(val_case.rgb))      
+        if metric_total=={}:
+          metric_total = {k:[v] for k,v in metric.items()}
+        else:
+          for k, v in metric.items():
+            metric_total[k].append(v)
+      metric_total = {k: np.mean(v) for k, v in metric_total.items()}
+      for name, val in metric_total.items():
+        if not np.isnan(val):
+          print(f'{name} = {val:.4f}')
+          summary_writer.scalar('train_metrics_val/' + name, val, step)
+      
+        
     if config.train_render_every > 0 and (step % config.train_render_every == 0 or step==init_step):
       # We reuse the same random number generator from the optimization step
       # here on purpose so that the visualization matches what happened in

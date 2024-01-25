@@ -671,7 +671,10 @@ def cast_ray_batch(
       pixtocam_ndc=pixtocam_ndc,
       camtype=camtype,
       xnp=xnp)
-
+  if pixels.bg_color is not None:
+    bg_color = pixels.bg_color*np.ones_like(origins)
+  else:
+    bg_color = None
   # Create Rays data structure.
   return utils.Rays(
       origins=origins,
@@ -685,6 +688,7 @@ def cast_ray_batch(
       cam_idx=pixels.cam_idx,
       exposure_idx=pixels.exposure_idx,
       exposure_values=pixels.exposure_values,
+      bg_color=bg_color
   )
 
 

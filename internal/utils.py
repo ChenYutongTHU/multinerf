@@ -39,6 +39,7 @@ class Pixels:
   cam_idx: _Array
   exposure_idx: Optional[_Array] = None
   exposure_values: Optional[_Array] = None
+  bg_color: Optional[_Array] = None
 
 
 @flax.struct.dataclass
@@ -55,6 +56,7 @@ class Rays:
   cam_idx: _Array
   exposure_idx: Optional[_Array] = None
   exposure_values: Optional[_Array] = None
+  bg_color: Optional[_Array] = None
 
 
 # Dummy Rays object that can be used to initialize NeRF model.
@@ -93,6 +95,7 @@ class DataSplit(enum.Enum):
   """Dataset split."""
   TRAIN = 'train'
   TEST = 'test'
+  VAL = 'val'
 
 
 class BatchingMethod(enum.Enum):

@@ -7,16 +7,18 @@ Config.eval_render_interval = 1
 Config.data_loss_type = 'mse'
 Config.adam_eps = 1e-8
 Config.val_frame_num = 10
-Config.train_val_every = 50000
+Config.train_val_every = 50000 
 Config.checkpoint_every = 50000
-Config.blender_bg_color_train = 'black'
+Config.blender_bg_color_train = 'random'
 Config.blender_bg_color_test = 'black'
+Config.blender_test_json='test_single-scale.json'
+Config.blender_val_json='test_single-scale.json'
 
 Model.num_levels = 2
 Model.num_prop_samples = 128
 Model.num_nerf_samples = 32
 Model.use_viewdirs = False
-Model.bg_intensity_range = (0.,0.) # Very important!
+Model.bg_intensity_range = (0.,0.) # Very important! Now can be removed
 
 PropMLP.net_depth = 4
 PropMLP.net_width = 256
@@ -27,7 +29,7 @@ NerfMLP.net_depth = 8
 NerfMLP.net_width = 512
 NerfMLP.disable_density_normals = True
 
-Config.distortion_loss_mult = 0.
+# Config.distortion_loss_mult = 0.
 
 NerfMLP.max_deg_point = 16
 PropMLP.max_deg_point = 16

@@ -246,8 +246,8 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
 
   def __init__(self,
                split: str,
-               data_dir: str,
-               config: configs.Config):
+               data_dir: str, 
+               config: configs.Config,):
     super().__init__()
 
     # Initialize attributes
@@ -292,7 +292,6 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
     self.pixtocams: np.ndarray = None
     self.height: int = None
     self.width: int = None
-
     # Load data from disk using provided config parameters.
     self._load_renderings(config)
     if self.render_path:
@@ -324,8 +323,10 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
     # Seed the queue with one batch to avoid race condition.
     if self.split == utils.DataSplit.TRAIN:
       self._next_fn = self._next_train
+      self.bg_color = config.blender_bg_color_train
     else:
-      self._next_fn = self._next_test
+      self._next_fn = self._next_test # For train or eval 
+      self.bg_color = config.blender_bg_color_test
     self._queue.put(self._next_fn())
     self.start()
 
@@ -432,7 +433,13 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
       ray_kwargs['exposure_values'] = broadcast_scalar(
           self.render_exposures[cam_idx])
 
-    pixels = utils.Pixels(pix_x_int, pix_y_int, **ray_kwargs)
+    if self.bg_color == 'random':
+      bg_color = np.random.uniform(size=(3,))
+    elif self.bg_color == 'white':
+      bg_color = np.array([1., 1., 1.]) #white background
+    elif self.bg_color == 'black':
+      bg_color = np.array([0., 0., 0.])
+    pixels = utils.Pixels(pix_x_int, pix_y_int, bg_color=bg_color, **ray_kwargs)
     if self._cast_rays_in_train_step and self.split == utils.DataSplit.TRAIN:
       # Fast path, defer ray computation to the training loop (on device).
       rays = pixels
@@ -446,13 +453,15 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
     batch['rays'] = rays
     if not self.render_path: #TODO self.images=None? 
       if self.config.blender_dataloader_type == 'list':
-        batch['rgb'] = self.images[cam_idx, pix_y_int, pix_x_int]
+        images = self.images[cam_idx, pix_y_int, pix_x_int]
+        images = self.rgba_to_rgb(images, bg_color=bg_color) #H,W,3
+        batch['rgb'] = images
       else:
-        assert self._batching != utils.BatchingMethod.ALL_IMAGES
+        assert self._batching != utils.BatchingMethod.ALL_IMAGES, 'We do not support ALL_IMAGES batching for blender_dataloader_type == "single"'
         images = []
         ci  = cam_idx if type(cam_idx) == int else cam_idx[0]
         image = self.read_image(self.config, self.fprefixes[ci])
-        image = self.rgba_to_rgb(image) #H,W,3
+        image = self.rgba_to_rgb(image, bg_color=bg_color) #H,W,3
         images = image[pix_y_int, pix_x_int]
         batch['rgb'] = images
     if self._load_disps:
@@ -536,9 +545,9 @@ class Blender(Dataset):
         image = get_img_(f) / 255.
       return image
 
-  def rgba_to_rgb(self, images):
+  def rgba_to_rgb(self, images, bg_color=(1., 1., 1.)):
       rgb, alpha = images[..., :3], images[..., -1:]
-      images= rgb * alpha + (1. - alpha)  # Use a white background.
+      images= rgb * alpha + (1. - alpha)*bg_color  # Use a white background. ((N),H,W,3)
       return images 
   
   def _load_renderings(self, config):
@@ -546,9 +555,13 @@ class Blender(Dataset):
     if config.render_path:
       raise ValueError('render_path cannot be used for the blender dataset.')
     if self.split.value == 'train':
+      frame_interval = 1
       pose_file_name = config.blender_train_json 
     elif self.split.value == 'test':
+      frame_interval = 1
       pose_file_name = config.blender_test_json 
+    elif self.split.value == 'val':
+      pose_file_name = config.blender_val_json
     pose_file = path.join(self.data_dir, pose_file_name)
     with utils.open_file(pose_file, 'r') as fp:
       meta = json.load(fp)
@@ -561,7 +574,11 @@ class Blender(Dataset):
     nears, fars = [], []
 
     pixtocams, focals = [], []
-    for ffi, frame in tqdm(enumerate(meta['frames'])):
+
+    if self.split.value == 'val':
+      frame_interval = len(meta['frames']) // config.val_frame_num
+      print(f'Using every {frame_interval} frames for validation')
+    for ffi, frame in tqdm(enumerate(meta['frames'][::frame_interval])):
       fprefix = os.path.join(self.data_dir, frame['file_path'])
       fprefixes.append(fprefix)
       image_names.append(frame.get('image_name', frame['file_path'].replace('/', '-')).replace('.png',''))
@@ -608,7 +625,8 @@ class Blender(Dataset):
       if self._load_normals:
         self.normal_images = np.stack(normal_images, axis=0)
         self.alphas = images[..., -1]
-      self.images = self.rgba_to_rgb(images)
+      #self.images = self.rgba_to_rgb(images, bg_color=(1., 1., 1.))
+      self.images = images
     else:
       self.images = None
     self.camtoworlds = np.stack(cams, axis=0)

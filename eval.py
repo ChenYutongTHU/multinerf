@@ -44,7 +44,7 @@ jax.config.parse_flags_with_absl()
 def main(unused_argv):
   config = configs.load_config(save_config=False)
 
-  dataset = datasets.load_dataset('test', config.data_dir, config)
+  dataset = datasets.load_dataset(config.eval_split, config.data_dir, config)
 
   key = random.PRNGKey(20200823)
   _, state, render_eval_pfn, _, _ = train_utils.setup_model(config, key)
@@ -69,6 +69,8 @@ def main(unused_argv):
       out_name = 'train_preds'
     elif config.render_split == 'test':
       out_name = f'{config.test_split_name}_preds'
+    if config.load_checkpoint_step is not None:
+      out_name += f'_step_{config.load_checkpoint_step}'
   out_dir = path.join(config.checkpoint_dir, out_name)
   path_fn = lambda x: path.join(out_dir, x)
 
@@ -76,7 +78,10 @@ def main(unused_argv):
     summary_writer = tensorboard.SummaryWriter(
         path.join(config.checkpoint_dir, 'eval'))
   while True:
-    state = checkpoints.restore_checkpoint(config.checkpoint_dir, state)
+    if config.load_checkpoint_step==None:
+      state = checkpoints.restore_checkpoint(config.checkpoint_dir, state)
+    else:
+      state = checkpoints.restore_checkpoint(config.checkpoint_dir, state, step=config.load_checkpoint_step)
     step = int(state.step)
     if step <= last_step:
       print(f'Checkpoint step {step} <= last step {last_step}, sleeping.')
@@ -98,6 +103,8 @@ def main(unused_argv):
     for idx in range(dataset.size):
       eval_start_time = time.time()
       batch = next(dataset)
+      if idx%config.eval_interval!=0:
+        continue
       if idx >= num_eval:
         print(f'Skipping image {idx+1}/{dataset.size}')
         continue
@@ -176,22 +183,26 @@ def main(unused_argv):
 
       if config.eval_save_output and (config.eval_render_interval > 0):
         if (idx % config.eval_render_interval) == 0:
+          if config.save_as_idx==True:
+            idx_str = f'{idx:03d}'
+          else:
+            idx_str = dataset.image_names[idx]          
           utils.save_img_u8(postprocess_fn(rendering['rgb']),
-                            path_fn(f'color_{idx:03d}.png'))
+                            path_fn(f'color_{idx_str}.png'))
           utils.save_img_u8(postprocess_fn(rendering['rgb_cc']),
-                            path_fn(f'color_cc_{idx:03d}.png'))
+                            path_fn(f'color_cc_{idx_str}.png'))
 
           for key in ['distance_mean', 'distance_median']:
             if key in rendering:
               utils.save_img_f32(rendering[key],
-                                 path_fn(f'{key}_{idx:03d}.tiff'))
+                                 path_fn(f'{key}_{idx_str}.tiff'))
 
           for key in ['normals']:
             if key in rendering:
               utils.save_img_u8(rendering[key] / 2. + 0.5,
-                                path_fn(f'{key}_{idx:03d}.png'))
+                                path_fn(f'{key}_{idx_str}.png'))
 
-          utils.save_img_f32(rendering['acc'], path_fn(f'acc_{idx:03d}.tiff'))
+          utils.save_img_f32(rendering['acc'], path_fn(f'acc_{idx_str}.tiff'))
 
     if (not config.eval_only_once) and (jax.host_id() == 0):
       summary_writer.scalar('eval_median_render_time', np.median(render_times),
@@ -236,10 +247,22 @@ def main(unused_argv):
         f.write(' '.join([str(r) for r in render_times]))
       for name in metrics[0]:
         with utils.open_file(path_fn(f'metric_{name}_{step}.txt'), 'w') as f:
+          average = np.mean([m[name] for m in metrics])
+          f.writelines(str(average)+'\n')
           f.write(' '.join([str(m[name]) for m in metrics]))
       for name in metrics_cc[0]:
         with utils.open_file(path_fn(f'metric_cc_{name}_{step}.txt'), 'w') as f:
+          average = np.mean([m[name] for m in metrics_cc])
+          f.writelines(str(average)+'\n')
           f.write(' '.join([str(m[name]) for m in metrics_cc]))
+
+      import json
+      with open(path_fn('metric_per_image.json'),'w') as f:
+        json.dump(metrics,f)
+      with open(path_fn('metric_cc_per_image.json'),'w') as f:
+        json.dump(metrics_cc,f)
+
+
       if config.eval_save_ray_data:
         for i, r, b in showcases:
           rays = {k: v for k, v in r.items() if 'ray_' in k}
