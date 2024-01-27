@@ -265,7 +265,7 @@ def create_train_step(model: models.Model,
     def loss_fn(variables):
       rays = batch.rays
       if config.cast_rays_in_train_step:
-        rays = camera_utils.cast_ray_batch(cameras, rays, camtype, xnp=jnp)
+        rays = camera_utils.cast_ray_batch(cameras, rays, camtype, xnp=jnp, config=config)
 
       # Indicates whether we need to compute output normal or depth maps in 2D.
       compute_extras = (

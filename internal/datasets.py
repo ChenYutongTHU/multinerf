@@ -411,13 +411,13 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
 
     broadcast_scalar = lambda x: np.broadcast_to(x, pix_x_int.shape)[..., None]
     if type(self.near)!=np.ndarray:
-      near_, far_ = self.near, self.far
+      near_, far_ = self.near, self.far #scalar or 'perpixel'
     else:
       near_, far_ = self.near[cam_idx], self.far[cam_idx]
     ray_kwargs = {
         'lossmult': broadcast_scalar(1.) if lossmult is None else lossmult,
-        'near': broadcast_scalar(near_),
-        'far': broadcast_scalar(far_),
+        'near': broadcast_scalar(near_) if near_!='perpixel' else near_,
+        'far': broadcast_scalar(far_) if far_!='perpixel' else far_,
         'cam_idx': broadcast_scalar(cam_idx),
     }
     # Collect per-camera information needed for each ray.
@@ -446,7 +446,7 @@ class Dataset(threading.Thread, metaclass=abc.ABCMeta):
     else:
       # Slow path, do ray computation using numpy (on CPU).
       rays = camera_utils.cast_ray_batch(
-          self.cameras, pixels, self.camtype, xnp=np)
+          self.cameras, pixels, self.camtype, xnp=np, config=self.config)
 
     # Create data batch.
     batch = {}
@@ -644,6 +644,11 @@ class Blender(Dataset):
       self.near = np.array(nears)
       self.far = np.array(fars)
       print('Camera-specific near and far planes loaded, overwrite Config.near/far')
+    else:
+      if config.nearfar_perpixel:
+        print('Near/far is not given in the json file, but nearfar_perpixel=True')
+        print('Bbox: shape={} radius={}'.format(config.bbox_shape, config.bbox_radius))
+        self.near, self.far = 'perpixel', 'perpixel'
 
 class LLFF(Dataset):
   """LLFF Dataset."""

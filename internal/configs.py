@@ -187,6 +187,10 @@ class Config:
   blender_bg_color_test: str='white'
   blender_bg_color_train: str='white'
 
+  nearfar_perpixel: bool = False
+  bbox_shape: str='hemisphere'
+  bbox_radius: float=5.0
+
   train_val_every: int = -1
   val_frame_num: int=10
 

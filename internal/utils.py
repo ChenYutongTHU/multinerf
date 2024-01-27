@@ -51,8 +51,8 @@ class Rays:
   radii: _Array
   imageplane: _Array
   lossmult: _Array
-  near: _Array
-  far: _Array
+  near: Union[_Array, str]
+  far: Union[_Array, str]
   cam_idx: _Array
   exposure_idx: Optional[_Array] = None
   exposure_values: Optional[_Array] = None

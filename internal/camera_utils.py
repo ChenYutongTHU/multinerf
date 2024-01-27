@@ -630,12 +630,44 @@ def pixels_to_rays(
 
   return origins, directions, viewdirs, radii, imageplane
 
+def rays2nearfar(origins, directions, config):
+    """Compute near and far planes for rays.
+    Args: 
+        origins: ray origins [...,3]
+        directions: ray directions [...,3]
+        config: configs.Config object
+    """
+    if config.bbox_shape == 'sphere':
+      R = config.bbox_radius
+      xc , dir = origins, directions
+      inner_prod = jnp.einsum('...i,...i->...', xc, dir) #H,W
+      d_norm = jnp.linalg.norm(dir, axis=-1)
+      xc_norm = jnp.linalg.norm(xc, axis=-1)
+      sqrt = R**2-xc_norm**2+inner_prod**2/d_norm**2
+      M = sqrt > 0
+      near = jnp.zeros_like(xc[...,0])
+      far = jnp.zeros_like(xc[...,0])
+      near = near.at[M].set(-inner_prod[M]/d_norm[M] - jnp.sqrt(sqrt[M])/d_norm[M])
+      near = near.at[near<0].set(0)
+      #near[M] = -jnp.sqrt(sqrt[M])/d_norm[M] - inner_prod[M]/d_norm[M]**2
+      #near[near<0] = 0
 
+      #far[M] = jnp.sqrt(sqrt[M])/d_norm[M] - inner_prod[M]/d_norm[M]**2   
+      far = far.at[M].set(jnp.sqrt(sqrt[M])/d_norm[M] - inner_prod[M]/d_norm[M]**2)   
+      far_z = xc[...,2] + far*dir[...,2] 
+      far_z0 = jnp.nan_to_num(-xc[...,2]/dir[...,2],nan=jnp.inf)
+      #far[far_z<0] = far_z0[far_z<0] + 1 # 1 for some room 
+      far = far.at[far_z<0].set(far_z0[far_z<0] + 1)
+      return near[...,None], far[...,None]
+    else:
+      raise ValueError('Unknown bbox_shape: %s' % config.bbox_shape)
+    
 def cast_ray_batch(
     cameras: Tuple[_Array, ...],
     pixels: utils.Pixels,
     camtype: ProjectionType = ProjectionType.PERSPECTIVE,
-    xnp: types.ModuleType = np) -> utils.Rays:
+    xnp: types.ModuleType = np,
+    config: Optional[configs.Config] = None) -> utils.Rays:
   """Maps from input cameras and Pixel batch to output Ray batch.
 
   `cameras` is a Tuple of four sets of camera parameters.
@@ -676,6 +708,11 @@ def cast_ray_batch(
   else:
     bg_color = None
   # Create Rays data structure.
+  if type(pixels.near)==str and pixels.near=='perpixel':
+    #update pixels.near to compute near and far
+    near, far = rays2nearfar(origins, directions, config)
+  else:
+    near, far = pixels.near, pixels.far
   return utils.Rays(
       origins=origins,
       directions=directions,
@@ -683,8 +720,8 @@ def cast_ray_batch(
       radii=radii,
       imageplane=imageplane,
       lossmult=pixels.lossmult,
-      near=pixels.near,
-      far=pixels.far,
+      near=near,
+      far=far,
       cam_idx=pixels.cam_idx,
       exposure_idx=pixels.exposure_idx,
       exposure_values=pixels.exposure_values,
